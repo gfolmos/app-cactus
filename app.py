@@ -1,7 +1,7 @@
-# Proyecto cactus
+# Programa rag cataceas optimizado
 # Muestra la inforamcion de cactus seleccionado
 # Autor: Gerardo Figueroa
-# Fecha: 15/06/26
+# Fecha: 17/06/26
 import streamlit as st
 import pandas as pd
 import os
@@ -13,103 +13,124 @@ from langchain_core.documents import Document
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 
-# 1. Configuración de la página
-st.set_page_config(layout="wide")
+# =====================================================================
+# 1. CONFIGURACIÓN E INFRAESTRUCTURA SEGURA
+# =====================================================================
+st.set_page_config(layout="wide", page_title="Cactaceae RAG-Analyzer")
 
-API_KEY = st.secrets["GROQ_API_KEY"]
-os.environ["GROQ_API_KEY"] = API_KEY
+try:
+    API_KEY = st.secrets["GROQ_API_KEY"]
+except KeyError:
+    st.error("Falta la credencial GROQ_API_KEY en los secretos de Streamlit.")
+    st.stop()
 
-# Inicializar el modelo de Groq
-llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
-
-# --- Interfaz de usuario ---
-st.header("🌵 Enciclopedia de Cactáceas Inteligente")
-st.write("Selecciona la foto de un cactus para que nuestra IA te de sus detalles, características y región.")
-
-# Directorio de imágenes
 IMAGE_DIR = "images"
 CSV_FILE = "cactus_data.csv"
 
-# Verificar que existan las carpetas y archivos necesarios
-if not os.path.exists(IMAGE_DIR):
-    st.error(f"No se encontró la carpeta '{IMAGE_DIR}'. Por favor créala y sube tus fotos ahí.")
+# =====================================================================
+# 2. CAPA DE IA AUTOMATIZADA CON CACHÉ (Se ejecuta una sola vez)
+# =====================================================================
+@st.cache_resource
+def inicializar_componentes_ia(ruta_csv: str):
+    """Inicializa el LLM, genera los Embeddings e indexa TODO el CSV en Chroma."""
+    # Inicializar LLM
+    llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2, groq_api_key=API_KEY)
+    
+    # Inicializar Embeddings
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    
+    # Cargar y parsear todo el catálogo a Documentos de LangChain
+    df = pd.read_csv(ruta_csv)
+    documentos = []
+    for _, row in df.iterrows():
+        texto_contexto = f"Archivo: {row['archivo']}. Nombre Común: {row['nombre_comun']}. Detalles base: {row['detalles']}"
+        doc = Document(page_content=texto_contexto, metadata={"source": row['archivo'], "nombre": row['nombre_comun']})
+        documentos.append(doc)
+    
+    # Crear la base de datos vectorial en memoria con todo el catálogo
+    vectorstore = Chroma.from_documents(documents=documentos, embedding=embeddings)
+    
+    return llm, vectorstore
+
+# Validaciones de archivos de sistema antes de iniciar la IA
+if not os.path.exists(IMAGE_DIR) or not os.path.exists(CSV_FILE):
+    st.error("Faltan recursos esenciales (directorio de imágenes o archivo CSV).")
     st.stop()
 
-if not os.path.exists(CSV_FILE):
-    st.error(f"No se encontró el archivo '{CSV_FILE}' con los datos de los cactus.")
-    st.stop()
+# Instanciación única a través de la caché
+llm_global, vectorstore_global = inicializar_componentes_ia(CSV_FILE)
 
-# Leer imágenes disponibles en la carpeta
-fotos_cactus = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+# =====================================================================
+# 3. INTERFAZ GRÁFICA Y LÓGICA DE USUARIO
+# =====================================================================
+def main():
+    st.header("🌵 Analizador de Información Multimodal RAG")
+    st.caption("Ecosistema inteligente para la generación de fichas botánicas")
 
-if not fotos_cactus:
-    st.warning("No se encontraron imágenes en la carpeta 'images/'.")
-else:
-    # Cargar base de datos base desde el CSV
-    df_cactus = pd.read_csv(CSV_FILE)
+    with st.expander("ℹ️ Explicación del Programa e Infraestructura"):
+        st.write("Selecciona una muestra botánica para generar su ficha técnica automatizada.")
 
-    # Crear dos columnas: Izquierda para selección/previsualización, Derecha para los resultados de la IA
+    fotos_cactus = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+    if not fotos_cactus:
+        st.warning("No se encontraron especímenes en la carpeta de imágenes.")
+        return
+
     col_izq, col_der = st.columns([1, 2])
 
     with col_izq:
-        st.subheader("Selección de Especie")
-        foto_seleccionada = st.selectbox("Elige una foto de cactus:", sorted(fotos_cactus))
-        
-        # Mostrar el preview pequeño de la foto fija
-        ruta_foto = os.path.join(IMAGE_DIR, foto_seleccionada)
-        st.image(ruta_foto, caption=f"Vista previa: {foto_seleccionada}", width=250)
+        st.subheader("Muestra Seleccionada")
+        foto_seleccionada = st.selectbox("Selecciona un cactus de la lista:", sorted(fotos_cactus))
+        st.image(os.path.join(IMAGE_DIR, foto_seleccionada), caption=f"ID: {foto_seleccionada}", width=280)
 
     with col_der:
-        st.subheader("Análisis e Información del Cactus")
+        st.subheader("Análisis de la Enciclopedia de Cactáceas")
         
-        # Buscar si el archivo seleccionado existe en nuestro CSV de datos
-        datos_encontrados = df_cactus[df_cactus['archivo'] == foto_seleccionada]
+        # Filtro rápido para saber el nombre común antes de interrogar al RAG
+        df_cactus = pd.read_csv(CSV_FILE)
+        match_datos = df_cactus[df_cactus['archivo'] == foto_seleccionada]
         
-        if datos_encontrados.empty:
-            st.info("ℹ️ Esta imagen no tiene información asignada en el archivo 'cactus_data.csv'.")
-        else:
-            # Obtener el texto descriptivo básico del CSV para indexarlo en el RAG
-            row = datos_encontrados.iloc[0]
-            texto_contexto = f"Archivo: {row['archivo']}. Nombre Común: {row['nombre_comun']}. Detalles base: {row['detalles']}"
+        if match_datos.empty:
+            st.info("ℹ️ Esta muestra de imagen no cuenta con metadatos asociados en el CSV.")
+            return
             
-            with st.spinner("La IA está consultando la enciclopedia de cactáceas..."):
-                try:
-                    # Crear un Documento dinámico para pasarle a Chroma
-                    documento = Document(page_content=texto_contexto, metadata={"source": foto_seleccionada})
-                    
-                    # Inicializar embeddings y Base de datos Vectorial en memoria
-                    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                    vectorstore = Chroma.from_documents(documents=[documento], embedding=embeddings)
-                    retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
-                    
-                    # Prompt del sistema para que Llama expanda la información de manera elegante
-                    system_prompt = (
-                        "Eres un bot experto en botánica y cactáceas.\n"
-                        "A partir del siguiente contexto, genera una ficha informativa clara, breve y atractiva.\n"
-                        "Debes incluir obligatoriamente las siguientes secciones usando negritas:\n"
-                        "- **Nombre Común y/o Científico**\n"
-                        "- **Características principales**\n"
-                        "- **Región u Origen geográfico**\n\n"
-                        "Si el contexto es muy corto, utiliza tus propios conocimientos amplios sobre cactáceas para complementar la respuesta de forma verídica.\n"
-                        "Responde siempre en Español.\n\n"
-                        "Contexto:\n{context}"
-                    )
-                    
-                    prompt = ChatPromptTemplate.from_messages([
-                        ("system", system_prompt),
-                        ("human", "Genera la ficha informativa para el cactus asociado a: {input}"),
-                    ])
-                    
-                    # Crear la cadena RAG
-                    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-                    rag_chain = create_retrieval_chain(retriever, question_answer_chain)
-                    
-                    # Invocar al modelo pasando el nombre del cactus encontrado
-                    resultado = rag_chain.invoke({"input": row['nombre_comun']})
-                    
-                    # Desplegar la información en un recuadro verde limpio
-                    st.success("¡Ficha generada con éxito!")
-                    st.markdown(resultado["answer"])
-                    
-                except Exception as e:
-                    st.error(f"Hubo un inconveniente al procesar los datos de la IA: {e}")
+        nombre_comun = match_datos.iloc[0]['nombre_comun']
+
+        with st.spinner("Consultando base de conocimiento vectorial..."):
+            try:
+                # El Retriever ahora busca de forma inteligente sobre toda la base indexada
+                retriever = vectorstore_global.as_retriever(
+                    search_kwargs={"filter": {"source": foto_seleccionada}}
+                )
+                
+                system_prompt = (
+                    "Eres un bot experto en botánica y cactáceas.\n"
+                    "A partir del siguiente contexto, genera una ficha informativa clara, breve y atractiva.\n"
+                    "Debes incluir obligatoriamente las siguientes secciones usando negritas:\n"
+                    "- **Nombre Común y/o Científico**\n"
+                    "- **Características principales**\n"
+                    "- **Región u Origen geográfico**\n\n"
+                    "Si el contexto es muy corto, utiliza tus propios conocimientos amplios sobre cactáceas para complementar de forma verídica.\n"
+                    "Responde siempre en Español.\n\n"
+                    "Contexto:\n{context}"
+                )
+                
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    ("human", "Genera la ficha informativa para el cactus asociado a: {input}"),
+                ])
+                
+                # Construcción y ejecución de la cadena
+                question_answer_chain = create_stuff_documents_chain(llm_global, prompt)
+                rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+                
+                resultado = rag_chain.invoke({"input": nombre_comun})
+                
+                st.success("¡Ficha técnica procesada!")
+                st.markdown(resultado["answer"])
+                
+            except Exception as e:
+                st.error(f"Error en el pipeline de IA: {e}")
+
+if __name__ == "__main__":
+    main()
