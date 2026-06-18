@@ -21,7 +21,7 @@ os.environ["GROQ_API_KEY"] = API_KEY
 
 # Inicializar el modelo de Groq
 llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.2)
-fotos_cactus = "img_1.jpg"
+
 
 # --- Interfaz de usuario ---
 st.header("🌵 Analizador de Información Multimodal RAG (Retrieval-Augmented Generation)")
