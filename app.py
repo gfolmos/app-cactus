@@ -59,7 +59,7 @@ if not fotos_cactus:
     st.warning("No se encontraron imágenes en la carpeta 'images/'.")
 else:
     # Cargar base de datos base desde el CSV
-    df_cactus = pd.read_csv(CSV_FILE)
+    df_cactus = pd.read_csv(CSV_FILE, encoding='latin1')
 
     # Crear dos columnas: Izquierda para selección/previsualización, Derecha para los resultados de la IA
     col_izq, col_der = st.columns([1, 2])
